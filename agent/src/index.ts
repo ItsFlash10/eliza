@@ -21,6 +21,12 @@ import {
     settings,
     IDatabaseAdapter,
     validateCharacterConfig,
+    UUID,
+    Memory,
+    Provider,
+    embed,
+    State,
+    MemoryManager,
 } from "@ai16z/eliza";
 import { bootstrapPlugin } from "@ai16z/plugin-bootstrap";
 import { confluxPlugin } from "@ai16z/plugin-conflux";
@@ -37,7 +43,7 @@ import readline from "readline";
 import yargs from "yargs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { character } from "./character.ts";
+import { Scraper } from "agent-twitter-client";
 import type { DirectClient } from "@ai16z/client-direct";
 
 const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
@@ -268,11 +274,11 @@ export function createAgent(
                 ? coinbaseCommercePlugin
                 : null,
             getSecret(character, "COINBASE_API_KEY") &&
-                getSecret(character, "COINBASE_PRIVATE_KEY")
+            getSecret(character, "COINBASE_PRIVATE_KEY")
                 ? coinbaseMassPaymentsPlugin
                 : null,
         ].filter(Boolean),
-        providers: [],
+        providers: [memecoinDataProvider],
         actions: [],
         services: [],
         managers: [],
@@ -312,12 +318,19 @@ async function startAgent(character: Character, directClient: any) {
         const runtime = createAgent(character, db, cache, token);
 
         await runtime.initialize();
-
-        const clients = await initializeClients(character, runtime);
-
+        const memecoinMemoryManager = new MemoryManager({
+            runtime,
+            tableName: "memecoindata",
+        });
+        runtime.registerMemoryManager(memecoinMemoryManager);
+        const twitterClientManager: any =
+            await TwitterClientInterface.start(runtime);
         directClient.registerAgent(runtime);
-
-        return clients;
+        await startIndexingMemecoinData(
+            runtime,
+            twitterClientManager.client.twitterClient
+        );
+        return twitterClientManager;
     } catch (error) {
         elizaLogger.error(
             `Error starting agent for character ${character.name}:`,
@@ -327,18 +340,76 @@ async function startAgent(character: Character, directClient: any) {
         throw error;
     }
 }
+const zeroUUID: UUID = "00000000-0000-0000-0000-000000000000" as UUID;
 
+const startIndexingMemecoinData = async (
+    runtime: IAgentRuntime,
+    twitterClient: Scraper
+) => {
+    const runIndexing = async () => {
+        elizaLogger.log("Indexing Memocoin data...");
+        const memecoinManager = runtime.getMemoryManager("memecoindata");
+        const a = await memecoinManager.getMemories({ roomId: zeroUUID });
+        const handlesToIndex = ["MemeRadarTK", "solana_daily", "SolanaFloor"];
+        await runtime.ensureRoomExists(zeroUUID);
+        await runtime.ensureUserExists(
+            zeroUUID,
+            "MemeRadarTK",
+            null,
+            "twitter"
+        );
+        for (const handle of handlesToIndex) {
+            const tweets = twitterClient.getTweets(handle, 10);
+            for await (const tweet of tweets) {
+                if (!tweet.text) continue;
+                console.log("Indexing tweet", tweet.text);
+                const memory: Memory = {
+                    content: {
+                        text: tweet.text,
+                    },
+                    id: tweet.id as UUID,
+                    roomId: zeroUUID as UUID,
+                    userId: (tweet.userId as UUID | null) ?? (zeroUUID as UUID),
+                    agentId: runtime.agentId,
+                };
+                await memecoinManager.addEmbeddingToMemory(memory);
+                await memecoinManager.createMemory(memory);
+            }
+        }
+        let delayMintues = 1;
+        elizaLogger.log("Indexing Memocoin data completed.");
+        setTimeout(runIndexing, delayMintues * 60 * 1000);
+        elizaLogger.log(`Next Indexing Scheduled in ${delayMintues} minutes`);
+    };
+    runIndexing();
+};
+const memecoinDataProvider: Provider = {
+    get: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
+        const embedding = await embed(runtime, message.content.text);
+        const memecoinManager = runtime.getMemoryManager("memecoindata");
+        const memories = await memecoinManager.searchMemoriesByEmbedding(
+            embedding,
+            {
+                roomId: zeroUUID,
+                count: 5,
+            }
+        );
+        const formattedMemories = memories.map((memory) => {
+            return `Tweet: ${memory.content.text}\n\n`;
+        });
+        console.log("Formatted memories", formattedMemories);
+        return formattedMemories;
+    },
+};
 const startAgents = async () => {
     const directClient = await DirectClientInterface.start();
     const args = parseArguments();
-
-    let charactersArg = args.characters || args.character;
-
-    let characters = [character];
-
-    if (charactersArg) {
-        characters = await loadCharacters(charactersArg);
+    if (args.characters) {
+        elizaLogger.error("Only one character per instance supported.");
     }
+    let charactersArg = args.character;
+
+    let characters = await loadCharacters(charactersArg);
 
     try {
         for (const character of characters) {

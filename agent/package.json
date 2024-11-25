@@ -9,7 +9,7 @@
         "dev": "tsc && nodemon --watch src --watch ../core/dist --ext ts,json --exec 'node --loader ts-node/esm' src/index.ts",
         "start:service:all": "pm2 start pnpm --name=\"all\" --restart-delay=3000 --max-restarts=10 -- run start:all",
         "stop:service:all": "pm2 stop all",
-        "start:all": "node --loader ts-node/esm src/index.ts --characters=\"../characters/bawnd.character.json\""
+        "start:all": "node --loader ts-node/esm src/index.ts --character=\"../characters/bawnd.character.json\""
     },
     "dependencies": {
         "@ai16z/adapter-postgres": "workspace:*",
@@ -30,7 +30,8 @@
         "@ai16z/plugin-coinbase": "workspace:*",
         "readline": "1.3.0",
         "ws": "8.18.0",
-        "yargs": "17.7.2"
+        "yargs": "17.7.2",
+        "agent-twitter-client": "0.0.14"
     },
     "devDependencies": {
         "ts-node": "10.9.2",
